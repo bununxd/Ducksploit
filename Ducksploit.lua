@@ -31,6 +31,17 @@ local genv = (type(getgenv) == "function" and getgenv()) or _G
 
 
 local floor = math.floor
+local clamp = math.clamp
+local sqrt = math.sqrt
+local exp = math.exp
+local maxn = math.max
+local minn = math.min
+local huge = math.huge
+local absn = math.abs
+local rad = math.rad
+local deg = math.deg
+local atan2 = math.atan2
+local acos = math.acos
 
 local NAME_CHARS = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 local function randomName()
@@ -39,16 +50,6 @@ local function randomName()
     for i = 1, n do
         local k = math.random(1, #NAME_CHARS)
         out[i] = NAME_CHARS:sub(k, k)
-    end
-    return table.concat(out)
-end
-
-local function shortTag()
-    local chars = "abcdefghijklmnopqrstuvwxyz0123456789"
-    local out = {}
-    for i = 1, 3 do
-        local k = math.random(1, #chars)
-        out[i] = chars:sub(k, k)
     end
     return table.concat(out)
 end
@@ -128,7 +129,7 @@ end
 
 local function isFiniteNumber(value)
     return type(value) == "number" and value == value
-        and value ~= math.huge and value ~= -math.huge
+        and value ~= huge and value ~= -huge
 end
 
 local function isPointerBegin(input)
@@ -214,12 +215,15 @@ local state = {
     ColorOn = false, ColorBrightness = 0, ColorContrast = 0.1, ColorSaturation = 0.2,
     ColorTint = Color3.fromRGB(255, 255, 255),
     StretchOn = false, StretchAmount = 70,
+    TrailOn = false, TrailRainbow = false, TrailColor = Color3.fromRGB(255, 255, 255), TrailWidth = 1, TrailLength = 0.5,
+    CrosshairOn = false, CrosshairStyle = "Cross", CrosshairColor = Color3.fromRGB(40, 160, 255), CrosshairSize = 8, CrosshairThickness = 2, CrosshairGap = 3, CrosshairOutline = true, CrosshairSpin = false, CrosshairSpinSpeed = 180,
 
     AntiFling = true,
     AntiAFK = true,
     NoSpread = false,
 
     SpamText = "ducksploit is tuff", SpamDelay = 4,
+    TungMode = false,
 }
 
 local validBones = {
@@ -235,10 +239,12 @@ local BOOL_PREFS = {
     "AntiFling", "IgnoreTeammates", "ShowSkeleton", "ShowChams", "AntiAFK",
     "OutlineGlobal", "ChamsGlobal",
     "JumpVisuals", "JumpRainbow", "BloomOn", "ColorOn", "StretchOn", "NoSpread",
+    "TrailOn", "TrailRainbow", "CrosshairOn", "CrosshairOutline", "CrosshairSpin",
     "SilentAim", "SilentAimWallCheck", "SilentAimIgnoreTeammates",
     "HealthCheck", "StickyAim", "Humanized", "RageMethod", "Prediction",
     "SilentAimHealthCheck", "SilentAimSticky", "SilentAimPrediction", "SilentAimShowFOV",
     "TriggerBot", "TriggerBotTeamCheck", "TriggerBotWallCheck", "Resolver",
+    "TungMode",
 }
 local NUM_PREFS = {
     TextSize = {10, 22},
@@ -250,6 +256,8 @@ local NUM_PREFS = {
     BloomIntensity = {0, 3}, BloomSize = {0, 56}, BloomThreshold = {0, 2},
     ColorBrightness = {-0.5, 0.5}, ColorContrast = {-0.5, 1}, ColorSaturation = {-1, 2},
     StretchAmount = {40, 100},
+    TrailWidth = {0.2, 3}, TrailLength = {0.1, 2},
+    CrosshairSize = {2, 30}, CrosshairThickness = {1, 6}, CrosshairGap = {0, 20}, CrosshairSpinSpeed = {10, 1080},
     SilentAimFOV = {10, 600}, SilentAimDistance = {50, 2000},
     PredictionAmount = {0, 1}, SilentAimPredictionAmount = {0, 1},
     TriggerBotHitboxMul = {0.1, 3}, TriggerBotDelay = {0, 500}, TriggerBotRelease = {0, 500},
@@ -260,8 +268,9 @@ local STR_PREFS = {
     SilentAimMode = {"Always", "Hold"},
     AimType = {"Mouse", "Controller"},
     RageType = {"Camera Teleport", "Camera Lerp"},
+    CrosshairStyle = {"Cross", "Dot", "Cross + Dot", "Big Yahu"},
 }
-local COLOR_PREFS = {"ESPColor", "FriendColor", "EnemyColor", "CircleColor", "JumpColor", "ColorTint", "OutlineColor", "ChamsColor"}
+local COLOR_PREFS = {"ESPColor", "FriendColor", "EnemyColor", "CircleColor", "JumpColor", "ColorTint", "OutlineColor", "ChamsColor", "TrailColor", "CrosshairColor"}
 
 local stateVersion = 0
 
@@ -284,6 +293,9 @@ local Config = {
         {name = "Retro", model = "15081949"},
         {name = "Skybox HD", model = "16553683517"},
         {name = "Candy", model = "76584711398016"},
+        {name = "Dark Matter", model = "110290405998332"},
+        {name = "Scary Red Sky", model = "136055162054954"},
+        {name = "Purple Sky", model = "570559352"},
     },
     after = nil,
     http = game:GetService("HttpService"),
@@ -316,7 +328,7 @@ end
 function Config.decodeColor(value)
     if typeof(value) == "Color3" then return value end
     if type(value) == "table" and isFiniteNumber(value[1]) and isFiniteNumber(value[2]) and isFiniteNumber(value[3]) then
-        return Color3.fromRGB(math.clamp(value[1], 0, 255), math.clamp(value[2], 0, 255), math.clamp(value[3], 0, 255))
+        return Color3.fromRGB(clamp(value[1], 0, 255), clamp(value[2], 0, 255), clamp(value[3], 0, 255))
     end
     return nil
 end
@@ -351,7 +363,7 @@ function Config.parse(data)
         local value = data[key]
         if isFiniteNumber(value) then
             local scale = range[1] < 1 and 100 or 1
-            out[key] = math.clamp(floor(value * scale + 0.5) / scale, range[1], range[2])
+            out[key] = clamp(floor(value * scale + 0.5) / scale, range[1], range[2])
         end
     end
     for key, options in pairs(STR_PREFS) do
@@ -626,7 +638,7 @@ local function chooseTarget()
     local localPos = localRoot.Position
     local center = aimCenter()
     local maxDistance = state.MaxLockDistance
-    local bestPlayer, bestPart, bestScore = nil, nil, math.huge
+    local bestPlayer, bestPart, bestScore = nil, nil, huge
 
     for _, player in ipairs(Players:GetPlayers()) do
         local isTeammate = player.Team ~= nil and player.Team == LocalPlayer.Team
@@ -713,7 +725,7 @@ local function dropTarget()
 end
 
 local function angleBetween(a, b)
-    return math.acos(math.clamp(a.LookVector:Dot(b.LookVector), -1, 1))
+    return acos(clamp(a.LookVector:Dot(b.LookVector), -1, 1))
 end
 
 -- relative-mouse aiming keeps its sub-pixel remainder here between frames
@@ -731,7 +743,7 @@ local function lockStep(deltaTime)
         return
     end
 
-    deltaTime = math.clamp(
+    deltaTime = clamp(
         (type(deltaTime) == "number" and deltaTime == deltaTime) and deltaTime or (1 / 60),
         1 / 240, 1 / 15
     )
@@ -777,7 +789,7 @@ local function lockStep(deltaTime)
 
     local rage = state.RageMethod
     local teleport = rage and state.RageType == "Camera Teleport"
-    local smoothness = math.max(1, 1 + (1 - state.Sensitivity) * 19)
+    local smoothness = maxn(1, 1 + (1 - state.Sensitivity) * 19)
 
     local rawAim = Resolver.point(targetPart) or targetPart.Position
     if state.Prediction then
@@ -789,7 +801,7 @@ local function lockStep(deltaTime)
     if rage or smoothness <= 1 or not smoothedAim or (smoothedAim - rawAim).Magnitude > 30 then
         smoothedAim = rawAim
     else
-        smoothedAim = smoothedAim:Lerp(rawAim, 1 - math.exp(-60 * deltaTime))
+        smoothedAim = smoothedAim:Lerp(rawAim, 1 - exp(-60 * deltaTime))
     end
     local aimPosition = smoothedAim
 
@@ -803,21 +815,21 @@ local function lockStep(deltaTime)
         end
         local mouseLocation = UserInputService:GetMouseLocation()
         local dx, dy = screenPoint.X - mouseLocation.X, screenPoint.Y - mouseLocation.Y
-        local errLen = math.sqrt(dx * dx + dy * dy)
+        local errLen = sqrt(dx * dx + dy * dy)
 
         local alpha = 1
         if teleport then
             alpha = 1
         elseif rage then
-            alpha = 1 - math.exp(-45 * deltaTime)
+            alpha = 1 - exp(-45 * deltaTime)
         elseif smoothness > 1 then
-            alpha = 1 - math.exp(-(60 / (smoothness ^ 0.65)) * deltaTime)
+            alpha = 1 - exp(-(60 / (smoothness ^ 0.65)) * deltaTime)
         end
 
         -- hard leash: after correction the cursor may never sit further than leashPx from the target
         if not rage and errLen > 0.001 then
-            local pxPerDeg = Camera.ViewportSize.Y / math.max(Camera.FieldOfView, 1)
-            local leashPx = math.max(2, pxPerDeg * state.LeashAngle * 0.05)
+            local pxPerDeg = Camera.ViewportSize.Y / maxn(Camera.FieldOfView, 1)
+            local leashPx = maxn(2, pxPerDeg * state.LeashAngle * 0.05)
             if errLen * (1 - alpha) > leashPx then
                 alpha = 1 - leashPx / errLen
             end
@@ -831,8 +843,8 @@ local function lockStep(deltaTime)
 
         MouseAim.rx += dx
         MouseAim.ry += dy
-        local ix = MouseAim.rx >= 0 and math.floor(MouseAim.rx) or math.ceil(MouseAim.rx)
-        local iy = MouseAim.ry >= 0 and math.floor(MouseAim.ry) or math.ceil(MouseAim.ry)
+        local ix = MouseAim.rx >= 0 and floor(MouseAim.rx) or math.ceil(MouseAim.rx)
+        local iy = MouseAim.ry >= 0 and floor(MouseAim.ry) or math.ceil(MouseAim.ry)
         MouseAim.rx -= ix
         MouseAim.ry -= iy
         if ix ~= 0 or iy ~= 0 then pcall(mousemoverel, ix, iy) end
@@ -872,18 +884,18 @@ local function lockStep(deltaTime)
 
     if rage then
         -- Camera Teleport snaps instantly; Camera Lerp closes the gap very fast but still eases
-        local alpha = teleport and 1 or (1 - math.exp(-45 * deltaTime))
+        local alpha = teleport and 1 or (1 - exp(-45 * deltaTime))
         lockedRotation = lockedRotation:Lerp(desiredRotation, alpha)
     else
         local alpha = 1
         if smoothness > 1 then
-            alpha = 1 - math.exp(-(60 / (smoothness ^ 0.65)) * deltaTime)
+            alpha = 1 - exp(-(60 / (smoothness ^ 0.65)) * deltaTime)
         end
 
-        local leash = math.rad(state.LeashAngle)
+        local leash = rad(state.LeashAngle)
         local errBefore = angleBetween(lockedRotation, desiredRotation)
-        local boost = math.clamp((errBefore / leash - 0.6) / 0.4, 0, 1)
-        alpha = math.clamp(alpha + (1 - alpha) * boost * boost, 0, 1)
+        local boost = clamp((errBefore / leash - 0.6) / 0.4, 0, 1)
+        alpha = clamp(alpha + (1 - alpha) * boost * boost, 0, 1)
 
         lockedRotation = lockedRotation:Lerp(desiredRotation, alpha)
         local errAfter = angleBetween(lockedRotation, desiredRotation)
@@ -949,7 +961,7 @@ local SilentAim = (function()
 
         local localPos = localRoot.Position
         local center = aimCenter()
-        local bestPlayer, bestPart, bestScore = nil, nil, math.huge
+        local bestPlayer, bestPart, bestScore = nil, nil, huge
 
         for _, player in ipairs(Players:GetPlayers()) do
             local isTeammate = player.Team ~= nil and player.Team == LocalPlayer.Team
@@ -1166,8 +1178,8 @@ local TriggerBot = (function()
         Camera = workspace.CurrentCamera
         if not Camera then return nil end
         local center = aimCenter()
-        local fov = 36 * math.max(state.TriggerBotHitboxMul, 0.05)
-        local best, bestDist = nil, math.huge
+        local fov = 36 * maxn(state.TriggerBotHitboxMul, 0.05)
+        local best, bestDist = nil, huge
 
         for _, player in ipairs(Players:GetPlayers()) do
             local isTeammate = player.Team ~= nil and player.Team == LocalPlayer.Team
@@ -1194,12 +1206,12 @@ local TriggerBot = (function()
     local function fire()
         if firing then return end
         firing = true
-        task.delay(math.max(state.TriggerBotDelay, 0) / 1000, function()
+        task.delay(maxn(state.TriggerBotDelay, 0) / 1000, function()
             if not state.TriggerBot then firing = false; return end
             pcall(function()
                 if type(mouse1press) == "function" then mouse1press() end
             end)
-            task.delay(math.max(state.TriggerBotRelease, 0) / 1000, function()
+            task.delay(maxn(state.TriggerBotRelease, 0) / 1000, function()
                 pcall(function()
                     if type(mouse1release) == "function" then mouse1release() end
                 end)
@@ -1631,9 +1643,9 @@ local function layoutESP(obj, x, y, bw, bh)
         if state.BoxStyle == "Full" then
             setRect(obj.boxOut, x - 1, y - 1, bw + 2, bh + 2)
             setRect(obj.box, x, y, bw, bh)
-            setRect(obj.boxIn, x + 1, y + 1, math.max(bw - 2, 0), math.max(bh - 2, 0))
+            setRect(obj.boxIn, x + 1, y + 1, maxn(bw - 2, 0), maxn(bh - 2, 0))
         else
-            local len = math.clamp(floor(math.min(bw, bh) * 0.28), 3, 40)
+            local len = clamp(floor(minn(bw, bh) * 0.28), 3, 40)
             local t = 2
             local c = obj.corners
             setRect(c[1], x, y, len, t)
@@ -1660,10 +1672,10 @@ local function clipToViewport(cx, cy, tx, ty, vw, vh)
     if tx >= m and tx <= vw - m and ty >= m and ty <= vh - m then return tx, ty end
     local dx, dy = tx - cx, ty - cy
     local s = 1
-    if tx < m then s = math.min(s, (m - cx) / dx)
-    elseif tx > vw - m then s = math.min(s, (vw - m - cx) / dx) end
-    if ty < m then s = math.min(s, (m - cy) / dy)
-    elseif ty > vh - m then s = math.min(s, (vh - m - cy) / dy) end
+    if tx < m then s = minn(s, (m - cx) / dx)
+    elseif tx > vw - m then s = minn(s, (vw - m - cx) / dx) end
+    if ty < m then s = minn(s, (m - cy) / dy)
+    elseif ty > vh - m then s = minn(s, (vh - m - cy) / dy) end
     return cx + dx * s, cy + dy * s
 end
 
@@ -1695,13 +1707,13 @@ function Skeleton.build(obj, character, humanoid)
         line.AnchorPoint = Vector2.new(0.5, 0.5)
         line.BorderSizePixel = 0
         line.BackgroundColor3 = obj.color or WHITE
-        line.BackgroundTransparency = math.max(obj.fade, 0)
+        line.BackgroundTransparency = maxn(obj.fade, 0)
         line.Size = UDim2.fromOffset(0, 1)
         line.ZIndex = 2
         line.Visible = false
         line.Parent = obj.skel
         local stroke = newStroke(line, BLACK, 1)
-        stroke.Transparency = 0.5 + math.max(obj.fade, 0) * 0.5
+        stroke.Transparency = 0.5 + maxn(obj.fade, 0) * 0.5
         obj.lines[#obj.lines + 1] = line
         obj.lineStrokes[#obj.lineStrokes + 1] = stroke
     end
@@ -1749,8 +1761,8 @@ function Skeleton.update(obj, camera, character, humanoid)
         if pa and pb then
             local dx, dy = pb.X - pa.X, pb.Y - pa.Y
             line.Position = UDim2.fromOffset((pa.X + pb.X) * 0.5, (pa.Y + pb.Y) * 0.5)
-            line.Size = UDim2.fromOffset(math.sqrt(dx * dx + dy * dy), 1)
-            line.Rotation = math.deg(math.atan2(dy, dx))
+            line.Size = UDim2.fromOffset(sqrt(dx * dx + dy * dy), 1)
+            line.Rotation = deg(atan2(dy, dx))
             if not line.Visible then line.Visible = true end
         elseif line.Visible then
             line.Visible = false
@@ -1822,12 +1834,12 @@ local function updateESP(player, camera, viewport, mouse, origin, now)
     local x, y, bw, bh = 0, 0, 0, 0
     local onScreen = false
     if top.Z > 0 and bot.Z > 0 then
-        local h = math.abs(bot.Y - top.Y)
+        local h = absn(bot.Y - top.Y)
         if h < 6 then h = 6 end
         local w = h * 0.55
         bw, bh = floor(w + 0.5), floor(h + 0.5)
         x = floor((top.X + bot.X) * 0.5 - w * 0.5 + 0.5)
-        y = floor(math.min(top.Y, bot.Y) + 0.5)
+        y = floor(minn(top.Y, bot.Y) + 0.5)
         onScreen = x + bw > 0 and x < vw and y + bh > 0 and y < vh
     end
 
@@ -1885,7 +1897,7 @@ local function updateESP(player, camera, viewport, mouse, origin, now)
 
     local fade = 0
     if state.FadeWithDistance and not mark then
-        fade = math.clamp((distance - maxDist * 0.4) / (maxDist * 0.6), 0, 1) * 0.6
+        fade = clamp((distance - maxDist * 0.4) / (maxDist * 0.6), 0, 1) * 0.6
     end
     fade = floor(fade * 20 + 0.5) / 20
     if fade ~= obj.fade then applyFade(obj, fade) end
@@ -1938,7 +1950,7 @@ local function updateESP(player, camera, viewport, mouse, origin, now)
         end
 
         if state.ShowHealth then
-            local frac = math.clamp(humanoid.Health / math.max(humanoid.MaxHealth, 1), 0, 1)
+            local frac = clamp(humanoid.Health / maxn(humanoid.MaxHealth, 1), 0, 1)
             local q = floor(frac * 40 + 0.5)
             if q ~= obj.hpQ then
                 obj.hpQ = q
@@ -1962,7 +1974,7 @@ local function updateESP(player, camera, viewport, mouse, origin, now)
         else
             local rel = camera.CFrame:PointToObjectSpace(rp)
             local dx, dy = rel.X, -rel.Y
-            local m = math.sqrt(dx * dx + dy * dy)
+            local m = sqrt(dx * dx + dy * dy)
             if m < 1e-3 then dx, dy, m = 0, 1, 1 end
             local far = vw + vh
             fx, fy = vw * 0.5 + dx / m * far, vh * 0.5 + dy / m * far
@@ -1976,13 +1988,13 @@ local function updateESP(player, camera, viewport, mouse, origin, now)
         else ox, oy = vw * 0.5, vh - 2 end
 
         local dx, dy = fx - ox, fy - oy
-        local len = math.sqrt(dx * dx + dy * dy)
+        local len = sqrt(dx * dx + dy * dy)
         if len >= 2 then
             drawTracer = true
             local tracer = obj.tracer
             tracer.Position = UDim2.fromOffset((ox + fx) * 0.5, (oy + fy) * 0.5)
             tracer.Size = UDim2.fromOffset(len, state.TracerThickness)
-            tracer.Rotation = math.deg(math.atan2(dy, dx))
+            tracer.Rotation = deg(atan2(dy, dx))
         end
     end
     if drawTracer ~= obj.tracerVis then
@@ -2142,16 +2154,6 @@ do
     title.Parent = holder
 
 
-    local tag = Instance.new("TextLabel")
-    tag.Position = UDim2.new(1, -42, 0.5, -8)
-    tag.Size = UDim2.fromOffset(32, 16)
-    tag.BackgroundTransparency = 1
-    tag.Font = Enum.Font.Code
-    tag.TextSize = 11
-    tag.TextColor3 = THEME.Dim
-    tag.TextXAlignment = Enum.TextXAlignment.Right
-    tag.Text = shortTag()
-    tag.Parent = titleBar
 end
 
 local closeButton = Instance.new("TextButton")
@@ -2307,8 +2309,8 @@ local function enableSmoothScroll(page)
         local pos, size = page.AbsolutePosition, page.AbsoluteSize
         if mouse.X < pos.X or mouse.X > pos.X + size.X
             or mouse.Y < pos.Y or mouse.Y > pos.Y + size.Y then return end
-        local maxY = math.max(page.AbsoluteCanvasSize.Y - page.AbsoluteWindowSize.Y, 0)
-        local target = math.clamp(page.CanvasPosition.Y - input.Position.Z * 60, 0, maxY)
+        local maxY = maxn(page.AbsoluteCanvasSize.Y - page.AbsoluteWindowSize.Y, 0)
+        local target = clamp(page.CanvasPosition.Y - input.Position.Z * 60, 0, maxY)
         tween(page, {CanvasPosition = Vector2.new(0, target)}, 0.18)
     end))
 end
@@ -2437,7 +2439,6 @@ local function createRowButton(parent, text, width)
     button.TextSize = 10
     button.TextColor3 = THEME.Text
     button.Text = text
-    button.AutoButtonColor = false
     button.Parent = parent
     round(button, 11)
     local outline = newStroke(button, THEME.ButtonLine, 1)
@@ -2747,9 +2748,9 @@ local fly = (function()
             end
             local cam = workspace.CurrentCamera
             if not cam then return end
-            dt = math.min(dt, 0.1)
+            dt = minn(dt, 0.1)
 
-            local speed = math.max(state.FlySpeed, 1)
+            local speed = maxn(state.FlySpeed, 1)
 
             local st = hum:GetState()
             if st ~= Enum.HumanoidStateType.Freefall and st ~= Enum.HumanoidStateType.Climbing then
@@ -2767,7 +2768,7 @@ local fly = (function()
 
             local target = move.Magnitude > 1e-4 and move.Unit * speed or Vector3.zero
             local tau = target.Magnitude > r.curVel.Magnitude and CFG.accelTau or CFG.decelTau
-            r.curVel = r.curVel:Lerp(target, 1 - math.exp(-dt / tau))
+            r.curVel = r.curVel:Lerp(target, 1 - exp(-dt / tau))
 
             r.jitterT += dt
             if r.jitterT >= 1 / CFG.jitterHz then
@@ -2884,7 +2885,7 @@ local sprint = (function()
             local track = tracks[i]
             local n = track.Name:lower()
             if n:find("walk") or n:find("run") then
-                if math.abs(track.Speed - 1) > 0.02 then
+                if absn(track.Speed - 1) > 0.02 then
                     track:AdjustSpeed(1)
                 end
             end
@@ -2893,7 +2894,7 @@ local sprint = (function()
 
     local function step(_, dt)
         if not running then return end
-        dt = math.min(dt, CFG.maxDt)
+        dt = minn(dt, CFG.maxDt)
 
         local char = LocalPlayer.Character
         local hum = char and char:FindFirstChildOfClass("Humanoid")
@@ -2906,15 +2907,15 @@ local sprint = (function()
 
         local base = hum.WalkSpeed
         local dir = hum.MoveDirection
-        local mag = math.min(dir.Magnitude, 1)
+        local mag = minn(dir.Magnitude, 1)
         local moving = mag > 0.1
         local grounded = hum.FloorMaterial ~= Enum.Material.Air
 
-        local cap = math.max(state.SprintSpeed, base)
+        local cap = maxn(state.SprintSpeed, base)
         local target = moving and cap or base
         if cur < base then cur = base end
         local tau = target > cur and CFG.accelTau or CFG.decelTau
-        cur = math.min(target + (cur - target) * math.exp(-dt / tau), cap)
+        cur = minn(target + (cur - target) * exp(-dt / tau), cap)
 
         if moving and grounded and cur - base > CFG.minBoost then
             local d = dir.Unit * mag * cur
@@ -3348,7 +3349,7 @@ local function createSlider(text, key, minimum, maximum, step, onChange)
     round(knob, 5)
 
     local function fraction()
-        return math.clamp((state[key] - minimum) / (maximum - minimum), 0, 1)
+        return clamp((state[key] - minimum) / (maximum - minimum), 0, 1)
     end
 
     local dragging = false
@@ -3362,11 +3363,11 @@ local function createSlider(text, key, minimum, maximum, step, onChange)
 
     local function setFromX(x)
         if bar.AbsoluteSize.X <= 0 then return end
-        local f = math.clamp((x - bar.AbsolutePosition.X) / bar.AbsoluteSize.X, 0, 1)
+        local f = clamp((x - bar.AbsolutePosition.X) / bar.AbsoluteSize.X, 0, 1)
         local value = minimum + (maximum - minimum) * f
-        local n = math.floor(value / step + 0.5)
-        value = step < 1 and n / math.floor(1 / step + 0.5) or n * step
-        value = math.clamp(value, minimum, maximum)
+        local n = floor(value / step + 0.5)
+        value = step < 1 and n / floor(1 / step + 0.5) or n * step
+        value = clamp(value, minimum, maximum)
         if state[key] ~= value then
             state[key] = value
             draw()
@@ -3527,15 +3528,15 @@ local function createColorPicker(text, key, onChange)
     local function setSV(pos)
         local ap, as = sv.AbsolutePosition, sv.AbsoluteSize
         if as.X <= 0 or as.Y <= 0 then return end
-        s = math.clamp((pos.X - ap.X) / as.X, 0, 1)
-        v = 1 - math.clamp((pos.Y - ap.Y) / as.Y, 0, 1)
+        s = clamp((pos.X - ap.X) / as.X, 0, 1)
+        v = 1 - clamp((pos.Y - ap.Y) / as.Y, 0, 1)
         refresh(true)
     end
 
     local function setHue(pos)
         local ap, as = hueBar.AbsolutePosition, hueBar.AbsoluteSize
         if as.Y <= 0 then return end
-        h = math.clamp((pos.Y - ap.Y) / as.Y, 0, 0.999)
+        h = clamp((pos.Y - ap.Y) / as.Y, 0, 0.999)
         refresh(true)
     end
 
@@ -4672,6 +4673,230 @@ do
     Config.cleanups[#Config.cleanups + 1] = stop
 end
 
+
+createSection("Trail")
+do
+    local root, trail, att0, att1 = nil, nil, nil, nil
+
+    local function rainbowSequence()
+        return ColorSequence.new({
+            ColorSequenceKeypoint.new(0, Color3.fromHSV(0, 0.85, 1)),
+            ColorSequenceKeypoint.new(0.25, Color3.fromHSV(0.25, 0.85, 1)),
+            ColorSequenceKeypoint.new(0.5, Color3.fromHSV(0.5, 0.85, 1)),
+            ColorSequenceKeypoint.new(0.75, Color3.fromHSV(0.75, 0.85, 1)),
+            ColorSequenceKeypoint.new(1, Color3.fromHSV(1, 0.85, 1)),
+        })
+    end
+
+    local function apply()
+        if not (trail and att0 and att1) then return end
+        att0.Position = Vector3.new(0, state.TrailWidth / 2, 0)
+        att1.Position = Vector3.new(0, -state.TrailWidth / 2, 0)
+        trail.Lifetime = state.TrailLength
+        trail.Color = state.TrailRainbow and rainbowSequence() or ColorSequence.new(state.TrailColor)
+    end
+
+    local function destroyTrail()
+        if trail then trail:Destroy() end
+        trail, att0, att1, root = nil, nil, nil, nil
+    end
+
+    local function buildTrail(char)
+        destroyTrail()
+        root = char:FindFirstChild("HumanoidRootPart") or char:WaitForChild("HumanoidRootPart", 5)
+        if not root or not state.TrailOn then return end
+
+        att0 = Instance.new("Attachment")
+        att0.Name = randomName()
+        att0.Parent = root
+
+        att1 = Instance.new("Attachment")
+        att1.Name = randomName()
+        att1.Parent = root
+
+        trail = Instance.new("Trail")
+        trail.Name = randomName()
+        trail.MinLength = 0
+        trail.FaceCamera = true
+        trail.Attachment0 = att0
+        trail.Attachment1 = att1
+        trail.Transparency = NumberSequence.new({
+            NumberSequenceKeypoint.new(0, 0.1),
+            NumberSequenceKeypoint.new(1, 1),
+        })
+        trail.Parent = root
+        apply()
+    end
+
+    local conn
+
+    local function disable()
+        if conn then conn:Disconnect(); conn = nil end
+        destroyTrail()
+    end
+
+    local function enable()
+        disable()
+        local char = LocalPlayer.Character
+        if char then task.spawn(buildTrail, char) end
+        conn = LocalPlayer.CharacterAdded:Connect(function(newChar)
+            task.spawn(buildTrail, newChar)
+        end)
+    end
+
+    Module.begin("Trail", "TrailOn", function(enabled)
+        if enabled then enable() else disable() end
+    end)
+    createToggle("Rainbow", "TrailRainbow", apply)
+    createColorPicker("Color", "TrailColor", apply)
+    createSlider("Width", "TrailWidth", 0.2, 3, 0.1, apply)
+    createSlider("Length", "TrailLength", 0.1, 2, 0.05, apply)
+
+    if state.TrailOn then enable() end
+    Config.cleanups[#Config.cleanups + 1] = disable
+end
+
+createSection("Crosshair")
+do
+    local layer = Instance.new("Frame")
+    layer.Name = randomName()
+    layer.AnchorPoint = Vector2.new(0.5, 0.5)
+    layer.Position = UDim2.fromScale(0.5, 0.5)
+    layer.Size = UDim2.fromOffset(0, 0)
+    layer.BackgroundTransparency = 1
+    layer.ZIndex = 2
+    layer.Visible = state.CrosshairOn
+    layer.Parent = gui
+
+    local function bar()
+        local b = Instance.new("Frame")
+        b.AnchorPoint = Vector2.new(0.5, 0.5)
+        b.BorderSizePixel = 0
+        b.ZIndex = 2
+        b.Parent = layer
+        local outline = newStroke(b, BLACK, 1)
+        outline.ApplyStrokeMode = Enum.ApplyStrokeMode.Contextual
+        return b, outline
+    end
+
+    local top, topOutline = bar()
+    local bottom, bottomOutline = bar()
+    local left, leftOutline = bar()
+    local right, rightOutline = bar()
+    local bars = {top, bottom, left, right}
+
+    local dot = Instance.new("Frame")
+    dot.AnchorPoint = Vector2.new(0.5, 0.5)
+    dot.Position = UDim2.fromScale(0.5, 0.5)
+    dot.BorderSizePixel = 0
+    dot.ZIndex = 2
+    dot.Parent = layer
+    round(dot, 6)
+    local dotOutline = newStroke(dot, BLACK, 1)
+    dotOutline.ApplyStrokeMode = Enum.ApplyStrokeMode.Contextual
+
+    -- Big Yahu: star-of-david crosshair style, drawn as two overlapping triangles
+    local starLines, starOutlines = {}, {}
+    for i = 1, 6 do
+        local b, bOutline = bar()
+        starLines[i] = b
+        starOutlines[i] = bOutline
+    end
+
+    local function trianglePoints(radius, pointDown)
+        local base = pointDown and 90 or -90
+        local pts = {}
+        for i = 0, 2 do
+            local a = rad(base + i * 120)
+            pts[i + 1] = Vector2.new(math.cos(a) * radius, math.sin(a) * radius)
+        end
+        return pts
+    end
+
+    local function layoutStar(radius, thickness)
+        local up = trianglePoints(radius, false)
+        local down = trianglePoints(radius, true)
+        local idx = 1
+        for _, tri in ipairs({up, down}) do
+            for e = 1, 3 do
+                local p1, p2 = tri[e], tri[(e % 3) + 1]
+                local dx, dy = p2.X - p1.X, p2.Y - p1.Y
+                local line = starLines[idx]
+                line.Size = UDim2.fromOffset(sqrt(dx * dx + dy * dy), thickness)
+                line.Position = UDim2.fromOffset((p1.X + p2.X) * 0.5, (p1.Y + p2.Y) * 0.5)
+                line.Rotation = deg(atan2(dy, dx))
+                idx += 1
+            end
+        end
+    end
+
+    local outlines = {topOutline, bottomOutline, leftOutline, rightOutline, dotOutline}
+    for i = 1, 6 do outlines[#outlines + 1] = starOutlines[i] end
+
+    local function apply()
+        local size, thickness, gap = state.CrosshairSize, state.CrosshairThickness, state.CrosshairGap
+        local offset = gap + size / 2
+
+        top.Size = UDim2.fromOffset(thickness, size)
+        top.Position = UDim2.fromOffset(0, -offset)
+        bottom.Size = UDim2.fromOffset(thickness, size)
+        bottom.Position = UDim2.fromOffset(0, offset)
+        left.Size = UDim2.fromOffset(size, thickness)
+        left.Position = UDim2.fromOffset(-offset, 0)
+        right.Size = UDim2.fromOffset(size, thickness)
+        right.Position = UDim2.fromOffset(offset, 0)
+        dot.Size = UDim2.fromOffset(thickness + 2, thickness + 2)
+
+        local showCross = state.CrosshairStyle == "Cross" or state.CrosshairStyle == "Cross + Dot"
+        local showDot = state.CrosshairStyle == "Dot" or state.CrosshairStyle == "Cross + Dot"
+        local showStar = state.CrosshairStyle == "Big Yahu"
+
+        if showStar then layoutStar(size * 1.1, maxn(thickness - 1, 1)) end
+
+        for _, b in ipairs(bars) do b.BackgroundColor3 = state.CrosshairColor end
+        dot.BackgroundColor3 = state.CrosshairColor
+        for i = 1, 6 do starLines[i].BackgroundColor3 = state.CrosshairColor end
+        for _, o in ipairs(outlines) do o.Enabled = state.CrosshairOutline end
+
+        for _, b in ipairs(bars) do b.Visible = showCross end
+        dot.Visible = showDot
+        for i = 1, 6 do starLines[i].Visible = showStar end
+    end
+
+    -- crosshair spin: rotates the whole crosshair layer continuously while enabled
+    local spinConn = nil
+    local function setSpin(enabled)
+        if enabled then
+            if spinConn then return end
+            spinConn = RunService.RenderStepped:Connect(function(dt)
+                layer.Rotation = (layer.Rotation + state.CrosshairSpinSpeed * dt) % 360
+            end)
+        else
+            if spinConn then spinConn:Disconnect(); spinConn = nil end
+            layer.Rotation = 0
+        end
+    end
+
+    Module.begin("Crosshair", "CrosshairOn", function(enabled)
+        layer.Visible = enabled
+    end)
+    createCycle("Style", "CrosshairStyle", {"Cross", "Dot", "Cross + Dot", "Big Yahu"}, apply)
+    createColorPicker("Color", "CrosshairColor", apply)
+    createSlider("Size", "CrosshairSize", 2, 30, 1, apply)
+    createSlider("Thickness", "CrosshairThickness", 1, 6, 1, apply)
+    createSlider("Gap", "CrosshairGap", 0, 20, 1, apply)
+    createToggle("Outline", "CrosshairOutline", apply)
+    createToggle("Spin", "CrosshairSpin", setSpin)
+    createSlider("Spin Speed", "CrosshairSpinSpeed", 10, 1080, 10)
+
+    apply()
+    if state.CrosshairSpin then setSpin(true) end
+    Config.cleanups[#Config.cleanups + 1] = function()
+        setSpin(false)
+        layer:Destroy()
+    end
+end
+
 Module.finish()
 
 --// Spectate tab
@@ -5016,13 +5241,25 @@ end)
 do
     local conn = nil
     local hum = nil
+    local lastRoot = nil
     local savedAutoRotate = nil
 
     local function restore()
         if hum and hum.Parent and savedAutoRotate ~= nil then
             pcall(function() hum.AutoRotate = savedAutoRotate end)
         end
+        if lastRoot and lastRoot.Parent then
+            local cam = workspace.CurrentCamera
+            local look = cam and cam.CFrame.LookVector or Vector3.new(0, 0, -1)
+            local flat = Vector3.new(look.X, 0, look.Z)
+            if flat.Magnitude > 1e-3 then
+                pcall(function()
+                    lastRoot.CFrame = CFrame.new(lastRoot.Position, lastRoot.Position + flat.Unit)
+                end)
+            end
+        end
         hum = nil
+        lastRoot = nil
         savedAutoRotate = nil
     end
 
@@ -5051,8 +5288,9 @@ do
                 savedAutoRotate = h.AutoRotate
             end
             if h.AutoRotate then h.AutoRotate = false end
+            lastRoot = root
 
-            root.CFrame = root.CFrame * CFrame.Angles(0, math.rad(state.SpinSpeed) * math.min(dt, 0.1), 0)
+            root.CFrame = root.CFrame * CFrame.Angles(0, rad(state.SpinSpeed) * minn(dt, 0.1), 0)
         end)
     end
 
@@ -5518,7 +5756,7 @@ do
                 local delay = state.SpamDelay * (1 + math.random() * 0.1)
                 local t0 = os.clock()
                 while running and gen == myGen and os.clock() - t0 < delay do
-                    task.wait(math.min(0.1, math.max(delay - (os.clock() - t0), 0.01)))
+                    task.wait(minn(0.1, maxn(delay - (os.clock() - t0), 0.01)))
                 end
             end
         end)
@@ -5536,6 +5774,158 @@ do
     Config.stopSpam = stop
 end
 createSlider("Spam Delay (seconds)", "SpamDelay", 0.1, 5.5, 0.1)
+
+createSection("Tung Mode")
+do
+    local TUNG_ASSET_ID = "138151705692565"
+    local cachedModel = nil
+    local rigs = {}
+    local hiddenParts = {}
+    local heartbeatConn = nil
+
+    local function fetchModel()
+        if cachedModel then return cachedModel end
+        local ok, objects = pcall(function() return game:GetObjects("rbxassetid://" .. TUNG_ASSET_ID) end)
+        if (not ok or type(objects) ~= "table") and type(getobjects) == "function" then
+            ok, objects = pcall(getobjects, "rbxassetid://" .. TUNG_ASSET_ID)
+        end
+        if not ok or type(objects) ~= "table" then return nil end
+        for _, root in ipairs(objects) do
+            if root:IsA("Model") or root:IsA("BasePart") then
+                cachedModel = root
+            else
+                local found = root:FindFirstChildWhichIsA("Model", true) or root:FindFirstChildWhichIsA("BasePart", true)
+                if found then cachedModel = found end
+            end
+            if cachedModel then break end
+        end
+        return cachedModel
+    end
+
+    local function hideCharacter(character)
+        if hiddenParts[character] then return end
+        local saved = {}
+        for _, part in ipairs(character:GetDescendants()) do
+            if part:IsA("BasePart") then
+                saved[part] = part.LocalTransparencyModifier
+                part.LocalTransparencyModifier = 1
+            elseif part:IsA("Decal") then
+                saved[part] = part.Transparency
+                part.Transparency = 1
+            end
+        end
+        hiddenParts[character] = saved
+    end
+
+    local function restoreCharacter(character)
+        local saved = hiddenParts[character]
+        if not saved then return end
+        for inst, value in pairs(saved) do
+            if inst.Parent then
+                if inst:IsA("BasePart") then
+                    inst.LocalTransparencyModifier = value
+                elseif inst:IsA("Decal") then
+                    inst.Transparency = value
+                end
+            end
+        end
+        hiddenParts[character] = nil
+    end
+
+    local function spawnRig(player, character)
+        local root = character:FindFirstChild("HumanoidRootPart")
+        if not root then return end
+        local template = fetchModel()
+        if not template then return end
+
+        local clone = template:Clone()
+        clone.Name = randomName()
+        local halfHeight = 3
+        if clone:IsA("Model") then
+            if not clone.PrimaryPart then
+                clone.PrimaryPart = clone:FindFirstChildWhichIsA("BasePart", true)
+            end
+            for _, d in ipairs(clone:GetDescendants()) do
+                if d:IsA("BasePart") then
+                    d.Anchored = true
+                    d.CanCollide = false
+                    d.CanQuery = false
+                    d.CanTouch = false
+                end
+            end
+            local ok, size = pcall(function() return clone:GetExtentsSize() end)
+            if ok and size then halfHeight = size.Y / 2 end
+        else
+            clone.Anchored = true
+            clone.CanCollide = false
+            clone.CanQuery = false
+            clone.CanTouch = false
+            halfHeight = clone.Size.Y / 2
+        end
+        clone.Parent = workspace
+
+        hideCharacter(character)
+        rigs[player] = {model = clone, root = root, character = character, halfHeight = halfHeight}
+    end
+
+    local function removeRig(player)
+        local info = rigs[player]
+        if not info then return end
+        if info.character and info.character.Parent then restoreCharacter(info.character) end
+        if info.model then info.model:Destroy() end
+        rigs[player] = nil
+    end
+
+    local function clearAll()
+        for player in pairs(rigs) do removeRig(player) end
+        table.clear(rigs)
+        table.clear(hiddenParts)
+    end
+
+    local function hookPlayer(player)
+        local function onCharacter(character)
+            removeRig(player)
+            if not state.TungMode then return end
+            character:WaitForChild("HumanoidRootPart", 5)
+            if character.Parent and state.TungMode then spawnRig(player, character) end
+        end
+        if player.Character then onCharacter(player.Character) end
+        trackConnection(player.CharacterAdded:Connect(onCharacter))
+    end
+
+    local function enable()
+        for _, player in ipairs(Players:GetPlayers()) do task.spawn(hookPlayer, player) end
+        trackConnection(Players.PlayerAdded:Connect(function(player) task.spawn(hookPlayer, player) end))
+        trackConnection(Players.PlayerRemoving:Connect(removeRig))
+
+        heartbeatConn = RunService.Heartbeat:Connect(function()
+            for player, info in pairs(rigs) do
+                if not (info.root and info.root.Parent and info.model and info.model.Parent) then
+                    removeRig(player)
+                else
+                    local cframe = info.root.CFrame * CFrame.new(0, -3 + info.halfHeight, 0)
+                    if info.model:IsA("Model") and info.model.PrimaryPart then
+                        info.model:PivotTo(cframe)
+                    elseif info.model:IsA("BasePart") then
+                        info.model.CFrame = cframe
+                    end
+                end
+            end
+        end)
+    end
+
+    local function disable()
+        if heartbeatConn then heartbeatConn:Disconnect(); heartbeatConn = nil end
+        clearAll()
+    end
+
+    createToggle("Tung Mode", "TungMode", function(enabled)
+        if enabled then enable() else disable() end
+    end)
+
+    if state.TungMode then enable() end
+    Config.cleanups[#Config.cleanups + 1] = disable
+end
 
 showTab("aimbot")
 
@@ -5640,7 +6030,7 @@ do
             end
 
             local target = 60
-            if setCap and state.FPSUnlock then target = math.min(state.FPSCap, 60) end
+            if setCap and state.FPSUnlock then target = minn(state.FPSCap, 60) end
             if state.ESP and fps < target * 0.65 and lodBias < 2 then lodBias += 1
             elseif (not state.ESP or fps > target * 0.9) and lodBias > 0 then lodBias -= 1 end
             fpsClock, fpsFrames = 0, 0
@@ -5779,7 +6169,7 @@ trackConnection(UserInputService.InputChanged:Connect(function(input)
     if spectateLooking and input.UserInputType == Enum.UserInputType.MouseMovement then
         local sensitivity = 0.0035
         spectateYaw -= input.Delta.X * sensitivity
-        spectatePitch = math.clamp(spectatePitch - input.Delta.Y * sensitivity, -1.4, 1.4)
+        spectatePitch = clamp(spectatePitch - input.Delta.Y * sensitivity, -1.4, 1.4)
     end
 end))
 
