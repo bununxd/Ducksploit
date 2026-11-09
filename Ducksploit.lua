@@ -207,7 +207,7 @@ local state = {
     Fly = false, FlySpeed = 55, FlyKey = Enum.KeyCode.Unknown,
     Sprint = false, SprintSpeed = 25, SprintKey = Enum.KeyCode.Unknown,
     Noclip = false,
-    Spin = false, SpinSpeed = 720,
+    Spin = false, SpinSpeed = 180,
 
     SkyPreset = "Off",
     JumpVisuals = false, JumpRainbow = false, JumpSize = 14, JumpColor = Color3.fromRGB(120, 200, 255),
@@ -251,7 +251,7 @@ local NUM_PREFS = {
     MaxLockDistance = {20, 1000}, FOVRadius = {30, 600},
     Sensitivity = {0.05, 1}, LeashAngle = {5, 60}, FPSCap = {30, 9999},
     SprintSpeed = {16, 300}, FlySpeed = {10, 300}, SpamDelay = {0.1, 5.5},
-    ChamsOpacity = {10, 100}, SpinSpeed = {30, 2000},
+    ChamsOpacity = {10, 100}, SpinSpeed = {30, 20000},
     JumpSize = {6, 40},
     BloomIntensity = {0, 3}, BloomSize = {0, 56}, BloomThreshold = {0, 2},
     ColorBrightness = {-0.5, 0.5}, ColorContrast = {-0.5, 1}, ColorSaturation = {-1, 2},
@@ -269,6 +269,7 @@ local STR_PREFS = {
     AimType = {"Mouse", "Controller"},
     RageType = {"Camera Teleport", "Camera Lerp"},
     CrosshairStyle = {"Cross", "Dot", "Cross + Dot", "Big Yahu"},
+    FlyMode = {"Velocity", "Swim"},
 }
 local COLOR_PREFS = {"ESPColor", "FriendColor", "EnemyColor", "CircleColor", "JumpColor", "ColorTint", "OutlineColor", "ChamsColor", "TrailColor", "CrosshairColor"}
 
@@ -563,6 +564,7 @@ end
 --// Resolver
 local Resolver = (function()
     local history = setmetatable({}, {__mode = "k"})
+    local stamp = setmetatable({}, {__mode = "k"})
     local function point(part)
         if not part then return nil end
         if not state.Resolver then return part.Position end
@@ -571,8 +573,13 @@ local Resolver = (function()
             list = {}
             history[part] = list
         end
-        list[#list + 1] = part.Position
-        if #list > 4 then table.remove(list, 1) end
+        -- one sample per ~frame, otherwise repeated calls in the same frame flood the history
+        local now = os.clock()
+        if now - (stamp[part] or 0) >= 1 / 120 then
+            stamp[part] = now
+            list[#list + 1] = part.Position
+            if #list > 4 then table.remove(list, 1) end
+        end
         local sum = Vector3.zero
         for i = 1, #list do sum += list[i] end
         return sum / #list
@@ -1091,52 +1098,58 @@ do
         end
     end
 
-    -- remote args, workspace raycasts, legacy FindPartOnRay and camera ray helpers
+        -- remote args, workspace raycasts, legacy FindPartOnRay and camera ray helpers
     pcall(function()
         local oldNamecall
         oldNamecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
             if not state.SilentAim then return oldNamecall(self, ...) end
             local method = getnamecallmethod()
+            if isOurs() then return oldNamecall(self, ...) end
+
+            -- inner namecalls below overwrite the namecall method, so restore it before passing through
+            local function pass(...)
+                setnamecallmethod(method)
+                return oldNamecall(self, ...)
+            end
 
             if method == "FireServer" or method == "InvokeServer" then
-                if isOurs() or not looksLikeShotRemote(self) then return oldNamecall(self, ...) end
-                local part, point = SilentAim.target()
-                if part then
-                    local args = table.pack(...)
-                    rewriteArgs(args, point)
-                    return oldNamecall(self, table.unpack(args, 1, args.n))
+                if looksLikeShotRemote(self) then
+                    local part, point = SilentAim.target()
+                    if part then
+                        local args = table.pack(...)
+                        rewriteArgs(args, point)
+                        return pass(table.unpack(args, 1, args.n))
+                    end
                 end
             elseif method == "Raycast" then
-                if isOurs() then return oldNamecall(self, ...) end
                 local origin, direction = ...
                 if typeof(origin) == "Vector3" and typeof(direction) == "Vector3" and plausibleShot(origin, direction) then
                     local part, point = SilentAim.target()
                     if part then
-                        return oldNamecall(self, origin, (point - origin).Unit * direction.Magnitude, select(3, ...))
+                        return pass(origin, (point - origin).Unit * direction.Magnitude, select(3, ...))
                     end
                 end
             elseif method == "FindPartOnRay" or method == "FindPartOnRayWithIgnoreList"
                 or method == "FindPartOnRayWithWhitelist" then
-                if isOurs() then return oldNamecall(self, ...) end
                 local ray = ...
                 if typeof(ray) == "Ray" and plausibleShot(ray.Origin, ray.Direction) then
                     local part, point = SilentAim.target()
                     if part then
-                        local redirected = Ray.new(ray.Origin, (point - ray.Origin).Unit * ray.Direction.Magnitude)
-                        return oldNamecall(self, redirected, select(2, ...))
+                        return pass(Ray.new(ray.Origin, (point - ray.Origin).Unit * ray.Direction.Magnitude), select(2, ...))
                     end
                 end
             elseif method == "ScreenPointToRay" or method == "ViewportPointToRay" then
-                if isOurs() or self ~= workspace.CurrentCamera then return oldNamecall(self, ...) end
-                local ray = oldNamecall(self, ...)
-                local part, point = SilentAim.target()
-                if part and typeof(ray) == "Ray" then
-                    return Ray.new(ray.Origin, (point - ray.Origin).Unit * ray.Direction.Magnitude)
+                if self == workspace.CurrentCamera then
+                    local ray = pass(...)
+                    local part, point = SilentAim.target()
+                    if part and typeof(ray) == "Ray" then
+                        return Ray.new(ray.Origin, (point - ray.Origin).Unit * ray.Direction.Magnitude)
+                    end
+                    return ray
                 end
-                return ray
             end
 
-            return oldNamecall(self, ...)
+            return pass(...)
         end))
     end)
 
@@ -2703,6 +2716,15 @@ local fly = (function()
 
     local function randn() return (math.random() + math.random() - 1) * 0.5 end
 
+    -- Swim mode keeps the humanoid in the Swimming state, Velocity mode keeps it in Freefall
+    local function holdState(hum)
+        local want = state.FlyMode == "Swim" and Enum.HumanoidStateType.Swimming
+            or Enum.HumanoidStateType.Freefall
+        if hum:GetState() ~= want then
+            pcall(function() hum:ChangeState(want) end)
+        end
+    end
+
     local function teardownRig()
         local r = rig
         rig = nil
@@ -2726,7 +2748,8 @@ local fly = (function()
         local r = { root = root, hum = hum, curVel = root.AssemblyLinearVelocity, jitterV = Vector3.zero, jitterT = 0 }
         rig = r
 
-        pcall(function() hum:ChangeState(Enum.HumanoidStateType.Freefall) end)
+        pcall(function() hum:SetStateEnabled(Enum.HumanoidStateType.Swimming, true) end)
+        holdState(hum)
 
         held.w = UserInputService:IsKeyDown(Enum.KeyCode.W)
         held.a = UserInputService:IsKeyDown(Enum.KeyCode.A)
@@ -2752,9 +2775,13 @@ local fly = (function()
 
             local speed = maxn(state.FlySpeed, 1)
 
-            local st = hum:GetState()
-            if st ~= Enum.HumanoidStateType.Freefall and st ~= Enum.HumanoidStateType.Climbing then
-                pcall(function() hum:ChangeState(Enum.HumanoidStateType.Freefall) end)
+            if state.FlyMode == "Swim" then
+                holdState(hum)
+            else
+                local st = hum:GetState()
+                if st ~= Enum.HumanoidStateType.Freefall and st ~= Enum.HumanoidStateType.Climbing then
+                    holdState(hum)
+                end
             end
 
             local look, right = cam.CFrame.LookVector, cam.CFrame.RightVector
@@ -2855,94 +2882,6 @@ local fly = (function()
     end))
 
     return { start = start, stop = stop, isRunning = function() return rig ~= nil end }
-end)()
-
---// Sprint module
-local sprint = (function()
-    local CFG = { accelTau = 0.35, decelTau = 0.28, minBoost = 0.4, maxDt = 0.1 }
-
-    local BLOCKED = {
-        [Enum.HumanoidStateType.Climbing] = true,
-        [Enum.HumanoidStateType.Swimming] = true,
-        [Enum.HumanoidStateType.Seated] = true,
-        [Enum.HumanoidStateType.Ragdoll] = true,
-        [Enum.HumanoidStateType.FallingDown] = true,
-        [Enum.HumanoidStateType.PlatformStanding] = true,
-        [Enum.HumanoidStateType.Flying] = true,
-        [Enum.HumanoidStateType.Physics] = true,
-        [Enum.HumanoidStateType.Dead] = true,
-    }
-
-    local conn, removeC
-    local cur = 0
-    local running = false
-
-    local function pinWalkAnimation(hum)
-        local animator = hum:FindFirstChildOfClass("Animator")
-        if not animator then return end
-        local tracks = animator:GetPlayingAnimationTracks()
-        for i = 1, #tracks do
-            local track = tracks[i]
-            local n = track.Name:lower()
-            if n:find("walk") or n:find("run") then
-                if absn(track.Speed - 1) > 0.02 then
-                    track:AdjustSpeed(1)
-                end
-            end
-        end
-    end
-
-    local function step(_, dt)
-        if not running then return end
-        dt = minn(dt, CFG.maxDt)
-
-        local char = LocalPlayer.Character
-        local hum = char and char:FindFirstChildOfClass("Humanoid")
-        local root = char and char:FindFirstChild("HumanoidRootPart")
-        if not hum or not root or hum.Health <= 0 or hum.Sit or state.Fly
-            or BLOCKED[hum:GetState()] then
-            cur = 0
-            return
-        end
-
-        local base = hum.WalkSpeed
-        local dir = hum.MoveDirection
-        local mag = minn(dir.Magnitude, 1)
-        local moving = mag > 0.1
-        local grounded = hum.FloorMaterial ~= Enum.Material.Air
-
-        local cap = maxn(state.SprintSpeed, base)
-        local target = moving and cap or base
-        if cur < base then cur = base end
-        local tau = target > cur and CFG.accelTau or CFG.decelTau
-        cur = minn(target + (cur - target) * exp(-dt / tau), cap)
-
-        if moving and grounded and cur - base > CFG.minBoost then
-            local d = dir.Unit * mag * cur
-            local vel = root.AssemblyLinearVelocity
-            root.AssemblyLinearVelocity = Vector3.new(d.X, vel.Y, d.Z)
-            pinWalkAnimation(hum)
-        elseif not moving then
-            cur = base
-        end
-    end
-
-    local function stop()
-        running = false
-        if conn then conn:Disconnect(); conn = nil end
-        if removeC then removeC:Disconnect(); removeC = nil end
-        cur = 0
-    end
-
-    local function start()
-        stop()
-        running = true
-        conn = RunService.Stepped:Connect(step)
-        removeC = LocalPlayer.CharacterRemoving:Connect(function() cur = 0 end)
-        return true
-    end
-
-    return { start = start, stop = stop, isRunning = function() return running end }
 end)()
 
 --// Noclip module
@@ -5225,6 +5164,9 @@ setFlyEnabled = Module.begin("Flight", "Fly", function(enabled)
 end)
 
 createSlider("Flight Speed", "FlySpeed", 10, 300, 5)
+createCycle("Flight Mode", "FlyMode", {"Velocity", "Swim"}, function()
+    if state.Fly then fly.start() end
+end)
 createHotkeyRow("Flight Hotkey", "FlyKey")
 
 local setSprintEnabled = Module.begin("Sprint Boost", "Sprint", function(enabled)
@@ -5297,7 +5239,7 @@ do
     Module.begin("Spin Bot", "Spin", function(enabled)
         if enabled then start() else stop() end
     end)
-    createSlider("Spin Speed (deg/sec)", "SpinSpeed", 30, 2000, 10)
+    createSlider("Spin Speed (deg/sec)", "SpinSpeed", 30, 20000, 50)
     Config.stopSpin = stop
 end
 Module.finish()
@@ -5782,6 +5724,7 @@ do
     local rigs = {}
     local hiddenParts = {}
     local heartbeatConn = nil
+    local tungConns = {}
 
     local function fetchModel()
         if cachedModel then return cachedModel end
@@ -5890,13 +5833,21 @@ do
             if character.Parent and state.TungMode then spawnRig(player, character) end
         end
         if player.Character then onCharacter(player.Character) end
-        trackConnection(player.CharacterAdded:Connect(onCharacter))
+        tungConns[#tungConns + 1] = player.CharacterAdded:Connect(onCharacter)
+    end
+
+    local function disable()
+        if heartbeatConn then heartbeatConn:Disconnect(); heartbeatConn = nil end
+        for _, c in ipairs(tungConns) do c:Disconnect() end
+        table.clear(tungConns)
+        clearAll()
     end
 
     local function enable()
+        disable()
         for _, player in ipairs(Players:GetPlayers()) do task.spawn(hookPlayer, player) end
-        trackConnection(Players.PlayerAdded:Connect(function(player) task.spawn(hookPlayer, player) end))
-        trackConnection(Players.PlayerRemoving:Connect(removeRig))
+        tungConns[#tungConns + 1] = Players.PlayerAdded:Connect(function(p) task.spawn(hookPlayer, p) end)
+        tungConns[#tungConns + 1] = Players.PlayerRemoving:Connect(removeRig)
 
         heartbeatConn = RunService.Heartbeat:Connect(function()
             for player, info in pairs(rigs) do
@@ -5914,17 +5865,85 @@ do
         end)
     end
 
-    local function disable()
-        if heartbeatConn then heartbeatConn:Disconnect(); heartbeatConn = nil end
-        clearAll()
-    end
-
     createToggle("Tung Mode", "TungMode", function(enabled)
         if enabled then enable() else disable() end
     end)
 
     if state.TungMode then enable() end
     Config.cleanups[#Config.cleanups + 1] = disable
+end
+
+createSection("Server")
+do
+    local TeleportService = game:GetService("TeleportService")
+    local HttpService = game:GetService("HttpService")
+    local busy = false
+
+    local row = createRow("Server Hop", 32)
+    local button = createRowButton(row, "HOP", 84)
+    addHover(button, function() return THEME.Button end)
+
+    local function flash(text)
+        button.Text = text
+        task.delay(1.2, function()
+            if button.Parent and not busy then button.Text = "HOP" end
+        end)
+    end
+
+    local function fetchPage(cursor)
+        local url = ("https://games.roblox.com/v1/games/%d/servers/Public?sortOrder=Asc&limit=100"):format(game.PlaceId)
+        if cursor then url ..= "&cursor=" .. cursor end
+        local ok, res = pcall(request, {Url = url, Method = "GET"})
+        if not ok or type(res) ~= "table" or not res.Success then return nil end
+        local decoded, data = pcall(HttpService.JSONDecode, HttpService, res.Body)
+        return decoded and data or nil
+    end
+
+    local function findServer()
+        local pool, cursor = {}, nil
+        for _ = 1, 3 do
+            local data = fetchPage(cursor)
+            if not data then break end
+            for _, server in ipairs(data.data or {}) do
+                if server.id ~= game.JobId and server.playing < server.maxPlayers - 1 then
+                    pool[#pool + 1] = server
+                end
+            end
+            cursor = data.nextPageCursor
+            if not cursor then break end
+        end
+        if #pool == 0 then return nil end
+        return pool[math.random(1, #pool)]
+    end
+
+    button.MouseButton1Click:Connect(function()
+        if busy then return end
+        if type(request) ~= "function" then flash("NO HTTP") return end
+        busy = true
+        button.Text = "..."
+
+        task.spawn(function()
+            local server = findServer()
+            if not server then
+                busy = false
+                flash("NONE")
+                return
+            end
+
+            local ok = pcall(TeleportService.TeleportToPlaceInstance, TeleportService, game.PlaceId, server.id, LocalPlayer)
+            if not ok then
+                busy = false
+                flash("ERROR")
+                return
+            end
+
+            -- if the teleport silently fails, unlock the button again
+            task.delay(10, function()
+                busy = false
+                if button.Parent then button.Text = "HOP" end
+            end)
+        end)
+    end)
 end
 
 showTab("aimbot")
